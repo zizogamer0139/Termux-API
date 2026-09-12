@@ -1,0 +1,1677 @@
+_init_.py
+from .model import TermuxAI
+
+__all__ = ["TermuxAI"]
+
+knowledge.py
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+
+@dataclass
+class KnowledgeEntry:
+    topic: str
+    content: str
+    keywords: list[str]
+
+
+class KnowledgeBase:
+
+    def __init__(self):
+
+        self.entries: list[KnowledgeEntry] = []
+
+        self._load_default_knowledge()
+
+    def _load_default_knowledge(self) -> None:
+
+        self.add(
+            "termux",
+            "Termux is an Android terminal application and Linux environment.",
+            [
+                "termux",
+                "android terminal",
+                "linux android",
+            ],
+        )
+
+        self.add(
+            "python",
+            "Python is a general-purpose programming language known for readable syntax and a large ecosystem.",
+            [
+                "python",
+                "programming",
+                "language",
+            ],
+        )
+
+        self.add(
+            "minecraft",
+            "Minecraft is a sandbox game where players can explore, build, survive, and create custom content.",
+            [
+                "minecraft",
+                "block game",
+                "sandbox game",
+            ],
+        )
+
+        self.add(
+            "sodium",
+            "Sodium is a Minecraft optimization mod designed to improve rendering performance.",
+            [
+                "sodium",
+                "minecraft optimization",
+                "rendering",
+            ],
+        )
+
+    def add(
+        self,
+        topic: str,
+        content: str,
+        keywords: list[str],
+    ) -> None:
+
+        self.entries.append(
+            KnowledgeEntry(
+                topic=topic,
+                content=content,
+                keywords=keywords,
+            )
+        )
+
+    def search(
+        self,
+        query: str,
+    ) -> list[KnowledgeEntry]:
+
+        query = query.lower().strip()
+
+        if not query:
+            return []
+
+        results = []
+
+        for entry in self.entries:
+
+            score = 0
+
+            if entry.topic.lower() in query:
+                score += 3
+
+            for keyword in entry.keywords:
+
+                if keyword.lower() in query:
+                    score += 2
+
+            if score > 0:
+                results.append(
+                    (score, entry)
+                )
+
+        results.sort(
+            key=lambda item: item[0],
+            reverse=True,
+        )
+
+        return [
+            entry
+            for _, entry in results
+        ]
+
+    def get_best(
+        self,
+        query: str,
+    ) -> KnowledgeEntry | None:
+
+        results = self.search(query)
+
+        if not results:
+            return None
+
+        return results[0]
+
+
+knowledge = KnowledgeBase()
+
+memory.py
+from __future__ import annotations
+
+import sqlite3
+from datetime import datetime
+from pathlib import Path
+from typing import Optional
+
+
+class Memory:
+
+    def __init__(self, database_path: Optional[str] = None):
+
+        if database_path is None:
+            database_path = str(
+                Path(__file__).resolve().parent / "memory.db"
+            )
+
+        self.database_path = Path(database_path)
+
+        self.database_path.parent.mkdir(
+            parents=True,
+            exist_ok=True
+        )
+
+        self._initialize_database()
+
+    def _connect(self) -> sqlite3.Connection:
+
+        connection = sqlite3.connect(
+            self.database_path
+        )
+
+        connection.row_factory = sqlite3.Row
+
+        return connection
+
+    def _initialize_database(self) -> None:
+
+        with self._connect() as connection:
+
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS memories (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    content TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
+
+            connection.commit()
+
+    @staticmethod
+    def _timestamp() -> str:
+
+        return datetime.now().astimezone().isoformat(
+            timespec="seconds"
+        )
+
+    def save(self, content: str) -> int:
+
+        content = content.strip()
+
+        if not content:
+            raise ValueError(
+                "Memory content cannot be empty."
+            )
+
+        timestamp = self._timestamp()
+
+        with self._connect() as connection:
+
+            cursor = connection.execute(
+                """
+                INSERT INTO memories (
+                    content,
+                    created_at,
+                    updated_at
+                )
+                VALUES (?, ?, ?)
+                """,
+                (
+                    content,
+                    timestamp,
+                    timestamp
+                )
+            )
+
+            connection.commit()
+
+            return int(cursor.lastrowid)
+
+    def get(self, memory_id: int) -> Optional[dict]:
+
+        with self._connect() as connection:
+
+            row = connection.execute(
+                """
+                SELECT
+                    id,
+                    content,
+                    created_at,
+                    updated_at
+                FROM memories
+                WHERE id = ?
+                """,
+                (memory_id,)
+            ).fetchone()
+
+        if row is None:
+            return None
+
+        return dict(row)
+
+    def get_all(self) -> list[dict]:
+
+        with self._connect() as connection:
+
+            rows = connection.execute(
+                """
+                SELECT
+                    id,
+                    content,
+                    created_at,
+                    updated_at
+                FROM memories
+                ORDER BY id DESC
+                """
+            ).fetchall()
+
+        return [dict(row) for row in rows]
+
+    def search(self, query: str) -> list[dict]:
+
+        query = query.strip()
+
+        if not query:
+            return []
+
+        pattern = f"%{query}%"
+
+        with self._connect() as connection:
+
+            rows = connection.execute(
+                """
+                SELECT
+                    id,
+                    content,
+                    created_at,
+                    updated_at
+                FROM memories
+                WHERE content LIKE ?
+                ORDER BY id DESC
+                """,
+                (pattern,)
+            ).fetchall()
+
+        return [dict(row) for row in rows]
+
+    def delete(self, memory_id: int) -> bool:
+
+        with self._connect() as connection:
+
+            cursor = connection.execute(
+                """
+                DELETE FROM memories
+                WHERE id = ?
+                """,
+                (memory_id,)
+            )
+
+            connection.commit()
+
+            return cursor.rowcount > 0
+
+    def delete_matching(self, query: str) -> int:
+
+        query = query.strip()
+
+        if not query:
+            return 0
+
+        pattern = f"%{query}%"
+
+        with self._connect() as connection:
+
+            cursor = connection.execute(
+                """
+                DELETE FROM memories
+                WHERE content LIKE ?
+                """,
+                (pattern,)
+            )
+
+            connection.commit()
+
+            return cursor.rowcount
+
+    def clear(self) -> int:
+
+        with self._connect() as connection:
+
+            cursor = connection.execute(
+                """
+                DELETE FROM memories
+                """
+            )
+
+            connection.commit()
+
+            return cursor.rowcount
+
+    def count(self) -> int:
+
+        with self._connect() as connection:
+
+            row = connection.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM memories
+                """
+            ).fetchone()
+
+        return int(row["count"])
+
+    def update(
+        self,
+        memory_id: int,
+        content: str
+    ) -> bool:
+
+        content = content.strip()
+
+        if not content:
+            raise ValueError(
+                "Memory content cannot be empty."
+            )
+
+        timestamp = self._timestamp()
+
+        with self._connect() as connection:
+
+            cursor = connection.execute(
+                """
+                UPDATE memories
+                SET
+                    content = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    content,
+                    timestamp,
+                    memory_id
+                )
+            )
+
+            connection.commit()
+
+            return cursor.rowcount > 0
+
+
+memory = Memory()
+
+
+def save_memory(content: str) -> int:
+    return memory.save(content)
+
+
+def search_memory(query: str) -> list[dict]:
+    return memory.search(query)
+
+
+def get_memories() -> list[dict]:
+    return memory.get_all()
+
+
+def delete_memory(memory_id: int) -> bool:
+    return memory.delete(memory_id)
+
+
+def clear_memory() -> int:
+    return memory.clear()
+
+
+def memory_count() -> int:
+    return memory.count()
+
+model.py
+from __future__ import annotations
+
+from .parser import parse_message
+from .reasoning import reasoning_engine
+from .response import response_engine
+
+
+class TermuxAI:
+
+    def __init__(self):
+
+        self.name = "Termux AI"
+        self.version = "0.1.0"
+
+    def ask(
+        self,
+        message: str,
+    ) -> str:
+
+        parsed = parse_message(
+            message
+        )
+
+        result = reasoning_engine.reason(
+            parsed
+        )
+
+        return response_engine.generate(
+            result
+        )
+
+    def process(
+        self,
+        message: str,
+    ) -> dict:
+
+        parsed = parse_message(
+            message
+        )
+
+        result = reasoning_engine.reason(
+            parsed
+        )
+
+        result["parsed"] = {
+            "intent": parsed.intent,
+            "content": parsed.content,
+            "confidence": parsed.confidence,
+        }
+
+        return result
+
+
+ai = TermuxAI()
+
+parser.py
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+
+
+@dataclass
+class ParsedMessage:
+    intent: str
+    content: str
+    confidence: float
+
+
+class MessageParser:
+
+    def parse(self, message: str) -> ParsedMessage:
+
+        original = message.strip()
+        text = original.lower()
+
+        if not original:
+            return ParsedMessage(
+                intent="empty",
+                content="",
+                confidence=1.0
+            )
+
+        # --------------------------------------------------
+        # GREETINGS
+        # --------------------------------------------------
+
+        greeting_patterns = [
+            r"^hello\b",
+            r"^hi\b",
+            r"^hey\b",
+            r"^yo\b",
+            r"^good morning\b",
+            r"^good afternoon\b",
+            r"^good evening\b",
+        ]
+
+        if any(re.search(pattern, text) for pattern in greeting_patterns):
+            return ParsedMessage(
+                intent="greeting",
+                content=original,
+                confidence=0.99
+            )
+
+        # --------------------------------------------------
+        # GOODBYE
+        # --------------------------------------------------
+
+        goodbye_patterns = [
+            r"^goodbye\b",
+            r"^bye\b",
+            r"^see you\b",
+            r"^see ya\b",
+            r"^later\b",
+        ]
+
+        if any(re.search(pattern, text) for pattern in goodbye_patterns):
+            return ParsedMessage(
+                intent="goodbye",
+                content=original,
+                confidence=0.99
+            )
+
+        # --------------------------------------------------
+        # IDENTITY
+        # --------------------------------------------------
+
+        identity_patterns = [
+            r"who are you",
+            r"what are you",
+            r"what is your name",
+            r"what's your name",
+            r"tell me about yourself",
+        ]
+
+        if any(pattern in text for pattern in identity_patterns):
+            return ParsedMessage(
+                intent="identity",
+                content=original,
+                confidence=0.98
+            )
+
+        # --------------------------------------------------
+        # HELP
+        # --------------------------------------------------
+
+        help_patterns = [
+            r"^help$",
+            r"help me",
+            r"what can you do",
+            r"how can you help",
+            r"commands",
+        ]
+
+        if any(pattern in text for pattern in help_patterns):
+            return ParsedMessage(
+                intent="help",
+                content=original,
+                confidence=0.96
+            )
+
+        # --------------------------------------------------
+        # MEMORY SAVE
+        # --------------------------------------------------
+
+        memory_save_patterns = [
+            r"^remember that ",
+            r"^remember ",
+            r"^save that ",
+            r"^save this ",
+            r"^don't forget that ",
+            r"^dont forget that ",
+            r"^keep in mind that ",
+        ]
+
+        for pattern in memory_save_patterns:
+
+            match = re.match(pattern, original, re.IGNORECASE)
+
+            if match:
+
+                content = original[match.end():].strip()
+
+                return ParsedMessage(
+                    intent="memory_save",
+                    content=content,
+                    confidence=0.99
+                )
+
+        # --------------------------------------------------
+        # MEMORY FORGET
+        # --------------------------------------------------
+
+        memory_forget_patterns = [
+            r"^forget that ",
+            r"^forget ",
+            r"^remove from memory ",
+            r"^delete from memory ",
+            r"^don't remember ",
+            r"^dont remember ",
+        ]
+
+        for pattern in memory_forget_patterns:
+
+            match = re.match(pattern, original, re.IGNORECASE)
+
+            if match:
+
+                content = original[match.end():].strip()
+
+                return ParsedMessage(
+                    intent="memory_forget",
+                    content=content,
+                    confidence=0.99
+                )
+
+        # --------------------------------------------------
+        # TIME
+        # --------------------------------------------------
+
+        time_patterns = [
+            "what time is it",
+            "what's the time",
+            "whats the time",
+            "current time",
+            "tell me the time",
+            "time right now",
+            "what time",
+            "time now",
+        ]
+
+        if any(pattern in text for pattern in time_patterns):
+            return ParsedMessage(
+                intent="time",
+                content=original,
+                confidence=0.99
+            )
+
+        # --------------------------------------------------
+        # DATE
+        # --------------------------------------------------
+
+        date_patterns = [
+            "what is the date",
+            "what's the date",
+            "whats the date",
+            "what date is it",
+            "current date",
+            "today's date",
+            "todays date",
+            "today's date",
+            "what day is it",
+            "what day is today",
+            "today",
+        ]
+
+        if any(pattern in text for pattern in date_patterns):
+
+            return ParsedMessage(
+                intent="date",
+                content=original,
+                confidence=0.99
+            )
+
+        # --------------------------------------------------
+        # WEB SEARCH
+        # --------------------------------------------------
+
+        search_patterns = [
+            r"^search for ",
+            r"^search ",
+            r"^look up ",
+            r"^look for ",
+            r"^find information about ",
+            r"^find info about ",
+            r"^google ",
+            r"^browse for ",
+        ]
+
+        for pattern in search_patterns:
+
+            match = re.match(pattern, original, re.IGNORECASE)
+
+            if match:
+
+                query = original[match.end():].strip()
+
+                return ParsedMessage(
+                    intent="web_search",
+                    content=query,
+                    confidence=0.98
+                )
+
+        # --------------------------------------------------
+        # COMMANDS
+        # --------------------------------------------------
+
+        command_patterns = [
+            r"^open ",
+            r"^launch ",
+            r"^start ",
+            r"^run ",
+            r"^close ",
+            r"^stop ",
+            r"^install ",
+            r"^uninstall ",
+            r"^delete ",
+            r"^create ",
+        ]
+
+        if any(re.match(pattern, text) for pattern in command_patterns):
+
+            return ParsedMessage(
+                intent="command",
+                content=original,
+                confidence=0.92
+            )
+
+        # --------------------------------------------------
+        # CALCULATIONS
+        # --------------------------------------------------
+
+        # First check for a pure mathematical expression.
+        #
+        # Examples:
+        # 25 * 4
+        # 100 / 5
+        # 10 + 20
+        # (5 + 5) * 2
+        # 2^10
+
+        math_expression_pattern = re.compile(
+            r"^[\d\s+\-*/%^().]+$"
+        )
+
+        if math_expression_pattern.fullmatch(original):
+
+            return ParsedMessage(
+                intent="calculation",
+                content=original,
+                confidence=0.99
+            )
+
+        # --------------------------------------------------
+        # NATURAL LANGUAGE CALCULATIONS
+        # --------------------------------------------------
+
+        # Examples:
+        # What is 25 * 4?
+        # What's 100 / 5?
+        # Calculate 50 + 20
+        # Solve 12 * 12
+        # How much is 10 + 15?
+
+        calculation_patterns = [
+            r"what is\s+(.+)",
+            r"what's\s+(.+)",
+            r"whats\s+(.+)",
+            r"calculate\s+(.+)",
+            r"solve\s+(.+)",
+            r"compute\s+(.+)",
+            r"how much is\s+(.+)",
+        ]
+
+        for pattern in calculation_patterns:
+
+            match = re.search(
+                pattern,
+                text,
+                re.IGNORECASE
+            )
+
+            if match:
+
+                expression = match.group(1).strip()
+
+                # Remove question marks and surrounding punctuation.
+                expression = expression.rstrip("?!.")
+
+                # Only classify as a calculation if the extracted
+                # section actually contains numbers and math operators.
+
+                if (
+                    re.search(r"\d", expression)
+                    and re.search(r"[+\-*/%^]", expression)
+                ):
+
+                    return ParsedMessage(
+                        intent="calculation",
+                        content=expression,
+                        confidence=0.98
+                    )
+
+        # --------------------------------------------------
+        # QUESTIONS
+        # --------------------------------------------------
+
+        question_patterns = [
+            r"^what\b",
+            r"^why\b",
+            r"^how\b",
+            r"^when\b",
+            r"^where\b",
+            r"^who\b",
+            r"^which\b",
+            r"^can\b",
+            r"^could\b",
+            r"^would\b",
+            r"^is\b",
+            r"^are\b",
+            r"^do\b",
+            r"^does\b",
+            r"^did\b",
+            r"\?$",
+        ]
+
+        if any(re.search(pattern, text) for pattern in question_patterns):
+
+            return ParsedMessage(
+                intent="question",
+                content=original,
+                confidence=0.90
+            )
+
+        # --------------------------------------------------
+        # NORMAL CONVERSATION
+        # --------------------------------------------------
+
+        return ParsedMessage(
+            intent="conversation",
+            content=original,
+            confidence=0.75
+        )
+
+
+# ----------------------------------------------------------
+# GLOBAL PARSER
+# ----------------------------------------------------------
+
+parser = MessageParser()
+
+
+def parse_message(message: str) -> ParsedMessage:
+    return parser.parse(message)
+
+reasoning.py
+from __future__ import annotations
+
+import ast
+import math
+import operator
+
+from datetime import datetime
+
+from .knowledge import knowledge
+from .memory import memory
+from .parser import ParsedMessage
+from .web import search_web
+
+
+class ReasoningEngine:
+
+    def __init__(self):
+
+        self.operators = {
+            ast.Add: operator.add,
+            ast.Sub: operator.sub,
+            ast.Mult: operator.mul,
+            ast.Div: operator.truediv,
+            ast.Mod: operator.mod,
+            ast.Pow: operator.pow,
+            ast.USub: operator.neg,
+            ast.UAdd: operator.pos,
+        }
+
+    # ==================================================
+    # MAIN REASONING
+    # ==================================================
+
+    def reason(self, message: ParsedMessage) -> dict:
+
+        handlers = {
+            "empty": self.empty,
+            "greeting": self.greeting,
+            "goodbye": self.goodbye,
+            "identity": self.identity,
+            "help": self.help,
+
+            "calculation": self.calculation,
+
+            "time": self.time,
+            "date": self.date,
+
+            "memory_save": self.memory_save,
+            "memory_forget": self.memory_forget,
+
+            "web_search": self.web_search,
+
+            "command": self.command,
+
+            "question": self.question,
+            "conversation": self.conversation,
+        }
+
+        handler = handlers.get(
+            message.intent,
+            self.unknown
+        )
+
+        return handler(message)
+
+    # ==================================================
+    # BASIC RESPONSES
+    # ==================================================
+
+    def empty(self, message):
+
+        return {
+            "response": "You didn't say anything.",
+            "intent": "empty"
+        }
+
+    def greeting(self, message):
+
+        return {
+            "response": "Hello! I'm Termux AI. 🤖",
+            "intent": "greeting"
+        }
+
+    def goodbye(self, message):
+
+        return {
+            "response": "Goodbye! 👋",
+            "intent": "goodbye"
+        }
+
+    def identity(self, message):
+
+        return {
+            "response": (
+                "I'm Termux AI, a custom AI system "
+                "with my own reasoning engine."
+            ),
+            "intent": "identity"
+        }
+
+    def help(self, message):
+
+        return {
+            "response": (
+                "I can currently handle calculations, "
+                "memory, knowledge, questions, "
+                "web searches, and commands."
+            ),
+            "intent": "help"
+        }
+
+    # ==================================================
+    # CALCULATOR
+    # ==================================================
+
+    def _calculate_node(self, node):
+
+        if isinstance(node, ast.Constant):
+
+            if isinstance(node.value, (int, float)):
+
+                return node.value
+
+            raise ValueError()
+
+        if isinstance(node, ast.BinOp):
+
+            operation = self.operators.get(
+                type(node.op)
+            )
+
+            if operation is None:
+                raise ValueError()
+
+            left = self._calculate_node(
+                node.left
+            )
+
+            right = self._calculate_node(
+                node.right
+            )
+
+            if (
+                isinstance(node.op, ast.Pow)
+                and abs(right) > 100
+            ):
+                raise ValueError()
+
+            result = operation(
+                left,
+                right
+            )
+
+            if (
+                isinstance(result, float)
+                and not math.isfinite(result)
+            ):
+                raise ValueError()
+
+            return result
+
+        if isinstance(node, ast.UnaryOp):
+
+            operation = self.operators.get(
+                type(node.op)
+            )
+
+            if operation is None:
+                raise ValueError()
+
+            return operation(
+                self._calculate_node(
+                    node.operand
+                )
+            )
+
+        raise ValueError()
+
+    def calculation(self, message):
+
+        try:
+
+            expression = message.content.replace(
+                "^",
+                "**"
+            )
+
+            tree = ast.parse(
+                expression,
+                mode="eval"
+            )
+
+            result = self._calculate_node(
+                tree.body
+            )
+
+            return {
+                "response": str(result),
+                "intent": "calculation",
+                "result": result
+            }
+
+        except Exception:
+
+            return {
+                "response": "I couldn't calculate that safely.",
+                "intent": "calculation"
+            }
+
+    # ==================================================
+    # TIME
+    # ==================================================
+
+    def time(self, message):
+
+        now = datetime.now().astimezone()
+
+        return {
+            "response": (
+                f"The current local time is "
+                f"{now.strftime('%I:%M:%S %p')}."
+            ),
+            "intent": "time"
+        }
+
+    # ==================================================
+    # DATE
+    # ==================================================
+
+    def date(self, message):
+
+        now = datetime.now().astimezone()
+
+        return {
+            "response": (
+                f"Today's date is "
+                f"{now.strftime('%B %d, %Y')}."
+            ),
+            "intent": "date"
+        }
+
+    # ==================================================
+    # MEMORY
+    # ==================================================
+
+    def memory_save(self, message):
+
+        memory_id = memory.save(
+            message.content
+        )
+
+        return {
+            "response": "I'll remember that.",
+            "intent": "memory_save",
+            "memory_id": memory_id,
+            "content": message.content
+        }
+
+    def memory_forget(self, message):
+
+        deleted = memory.delete_matching(
+            message.content
+        )
+
+        return {
+            "response": (
+                f"I forgot {deleted} "
+                f"matching memory."
+            ),
+            "intent": "memory_forget",
+            "deleted": deleted
+        }
+
+    # ==================================================
+    # WEB SEARCH 🌐
+    # ==================================================
+
+    def web_search(self, message):
+
+        query = message.content.strip()
+
+        if not query:
+
+            return {
+                "response": (
+                    "I need something to search for."
+                ),
+                "intent": "web_search"
+            }
+
+        try:
+
+            results = search_web(
+                query,
+                max_results=5
+            )
+
+        except Exception as error:
+
+            return {
+                "response": (
+                    f"Web search failed: {error}"
+                ),
+                "intent": "web_search",
+                "action": "web_search",
+                "query": query,
+                "results": []
+            }
+
+        # ----------------------------------------------
+        # No results
+        # ----------------------------------------------
+
+        if not results:
+
+            return {
+                "response": (
+                    f"I couldn't find any web results "
+                    f"for '{query}'."
+                ),
+                "intent": "web_search",
+                "action": "web_search",
+                "query": query,
+                "results": []
+            }
+
+        # ----------------------------------------------
+        # Format results
+        # ----------------------------------------------
+
+        lines = [
+            f"Web results for: {query}",
+            ""
+        ]
+
+        result_data = []
+
+        for index, result in enumerate(
+            results,
+            start=1
+        ):
+
+            lines.append(
+                f"{index}. {result.title}"
+            )
+
+            lines.append(
+                f"   {result.url}"
+            )
+
+            if result.snippet:
+
+                lines.append(
+                    f"   {result.snippet}"
+                )
+
+            lines.append("")
+
+            result_data.append({
+                "title": result.title,
+                "url": result.url,
+                "snippet": result.snippet
+            })
+
+        return {
+            "response": "\n".join(lines).strip(),
+            "intent": "web_search",
+            "action": "web_search",
+            "query": query,
+            "results": result_data
+        }
+
+    # ==================================================
+    # COMMANDS
+    # ==================================================
+
+    def command(self, message):
+
+        return {
+            "response": (
+                f"I understood the command: "
+                f"{message.content}"
+            ),
+            "intent": "command",
+            "action": "command"
+        }
+
+    # ==================================================
+    # QUESTIONS
+    # ==================================================
+
+    def question(self, message):
+
+        result = knowledge.get_best(
+            message.content
+        )
+
+        if result:
+
+            return {
+                "response": result.content,
+                "intent": "question",
+                "action": "knowledge_search",
+                "topic": result.topic
+            }
+
+        return {
+            "response": "I don't know that yet.",
+            "intent": "question"
+        }
+
+    # ==================================================
+    # CONVERSATION
+    # ==================================================
+
+    def conversation(self, message):
+
+        return {
+            "response": (
+                "I'm still learning how to reason "
+                "about normal conversation."
+            ),
+            "intent": "conversation"
+        }
+
+    # ==================================================
+    # UNKNOWN
+    # ==================================================
+
+    def unknown(self, message):
+
+        return {
+            "response": "I don't understand that yet.",
+            "intent": "unknown"
+        }
+
+
+# ======================================================
+# GLOBAL REASONING ENGINE
+# ======================================================
+
+reasoning_engine = ReasoningEngine()
+
+
+def reason(message: ParsedMessage):
+
+    return reasoning_engine.reason(message)
+
+response.py
+from __future__ import annotations
+
+
+class ResponseEngine:
+
+    def generate(
+        self,
+        result: dict,
+    ) -> str:
+
+        response = result.get("response")
+
+        if response:
+            return str(response)
+
+        action = result.get("action")
+
+        if action == "web_search":
+            query = result.get("query", "")
+            return f"I would search the web for: {query}"
+
+        if action == "command":
+            return "I understood that as a command."
+
+        if action == "knowledge_search":
+            return "I don't have enough knowledge to answer that yet."
+
+        return "I'm not sure how to respond to that yet."
+
+
+response_engine = ResponseEngine()
+
+web.py
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from html import unescape
+from urllib.parse import quote_plus
+
+import requests
+
+
+@dataclass
+class SearchResult:
+    title: str
+    url: str
+    snippet: str
+
+
+class WebSearch:
+
+    def __init__(self):
+
+        self.search_url = "https://html.duckduckgo.com/html/"
+
+        self.headers = {
+            "User-Agent": (
+                "Mozilla/5.0 "
+                "(Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 "
+                "(KHTML, like Gecko) "
+                "Chrome/139.0 Safari/537.36"
+            )
+        }
+
+    # ==================================================
+    # SEARCH
+    # ==================================================
+
+    def search(
+        self,
+        query: str,
+        max_results: int = 5
+    ) -> list[SearchResult]:
+
+        query = query.strip()
+
+        if not query:
+            return []
+
+        try:
+
+            response = requests.get(
+                self.search_url,
+                params={
+                    "q": query
+                },
+                headers=self.headers,
+                timeout=10
+            )
+
+            response.raise_for_status()
+
+        except requests.RequestException as error:
+
+            print(
+                f"[WebSearch] Search failed: {error}"
+            )
+
+            return []
+
+        html = response.text
+
+        results = []
+
+        # ----------------------------------------------
+        # Find DuckDuckGo result blocks
+        # ----------------------------------------------
+
+        blocks = re.findall(
+            r'<div class="result results_links results_links_deep web-result.*?</div>\s*</div>',
+            html,
+            re.DOTALL
+        )
+
+        # Fallback for slightly different HTML.
+
+        if not blocks:
+
+            blocks = re.findall(
+                r'<div class="result.*?</div>\s*</div>',
+                html,
+                re.DOTALL
+            )
+
+        for block in blocks:
+
+            if len(results) >= max_results:
+                break
+
+            # ------------------------------------------
+            # Title + URL
+            # ------------------------------------------
+
+            title_match = re.search(
+                r'class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>',
+                block,
+                re.DOTALL
+            )
+
+            if not title_match:
+                continue
+
+            url = unescape(
+                title_match.group(1)
+            )
+
+            title = re.sub(
+                r"<.*?>",
+                "",
+                title_match.group(2)
+            )
+
+            title = unescape(
+                title
+            ).strip()
+
+            # ------------------------------------------
+            # Snippet
+            # ------------------------------------------
+
+            snippet_match = re.search(
+                r'class="result__snippet"[^>]*>(.*?)</a?>',
+                block,
+                re.DOTALL
+            )
+
+            if snippet_match:
+
+                snippet = re.sub(
+                    r"<.*?>",
+                    "",
+                    snippet_match.group(1)
+                )
+
+                snippet = unescape(
+                    snippet
+                ).strip()
+
+            else:
+
+                snippet = ""
+
+            if not title or not url:
+                continue
+
+            results.append(
+                SearchResult(
+                    title=title,
+                    url=url,
+                    snippet=snippet
+                )
+            )
+
+        return results
+
+    # ==================================================
+    # SIMPLE SEARCH
+    # ==================================================
+
+    def search_text(
+        self,
+        query: str,
+        max_results: int = 5
+    ) -> str:
+
+        results = self.search(
+            query,
+            max_results
+        )
+
+        if not results:
+
+            return (
+                f"I couldn't find any web results "
+                f"for '{query}'."
+            )
+
+        lines = [
+            f"Web results for: {query}",
+            ""
+        ]
+
+        for index, result in enumerate(
+            results,
+            start=1
+        ):
+
+            lines.append(
+                f"{index}. {result.title}"
+            )
+
+            lines.append(
+                f"   {result.url}"
+            )
+
+            if result.snippet:
+
+                lines.append(
+                    f"   {result.snippet}"
+                )
+
+            lines.append("")
+
+        return "\n".join(lines)
+
+
+# ======================================================
+# GLOBAL WEB SEARCH ENGINE
+# ======================================================
+
+web_search = WebSearch()
+
+
+def search_web(
+    query: str,
+    max_results: int = 5
+) -> list[SearchResult]:
+
+    return web_search.search(
+        query,
+        max_results
+    )
+
+
+def search_web_text(
+    query: str,
+    max_results: int = 5
+) -> str:
+
+    return web_search.search_text(
+        query,
+        max_results
+    )
+
+api.py
+from flask import Flask, request, jsonify
+
+app = Flask(__name__)
+
+
+# ─────────────────────────────────────────────
+# Termux AI — API
+# ─────────────────────────────────────────────
+
+@app.get("/")
+def home():
+    return jsonify({
+        "name": "Termux AI",
+        "version": "0.1.0",
+        "status": "online",
+        "message": "Termux AI API 🤖"
+    })
+
+
+@app.get("/api/status")
+def status():
+    return jsonify({
+        "status": "online",
+        "service": "Termux AI",
+        "version": "0.1.0"
+    })
+
+
+@app.post("/api/chat")
+def chat():
+    data = request.get_json(silent=True)
+
+    if not data:
+        return jsonify({
+            "error": "Request body must be JSON"
+        }), 400
+
+    message = data.get("message")
+
+    if not isinstance(message, str) or not message.strip():
+        return jsonify({
+            "error": "Missing or invalid 'message'"
+        }), 400
+
+    message = message.strip()
+
+    # TODO:
+    # Connect this to:
+    # parser -> memory -> knowledge -> reasoning -> response
+
+    response = f"You said: {message}"
+
+    return jsonify({
+        "response": response
+    })
+
+
+@app.errorhandler(404)
+def not_found(error):
+    return jsonify({
+        "error": "Endpoint not found"
+    }), 404
+
+
+@app.errorhandler(405)
+def method_not_allowed(error):
+    return jsonify({
+        "error": "Method not allowed"
+    }), 405
+
+
+if __name__ == "__main__":
+    app.run(
+        host="0.0.0.0",
+        port=5000,
+        debug=True
+    )
